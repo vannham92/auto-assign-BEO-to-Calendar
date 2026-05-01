@@ -7,7 +7,7 @@ import io
 
 # --- 1. CẤU HÌNH API ---
 # Thay API Key của bạn vào đây
-API_KEY = "DÁN_API_KEY_CỦA_BẠN_VÀO_ĐÂY" 
+API_KEY = "AIzaSyAWVJemE1vdVllQdp8m4B8wlo886aMjFvI" 
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
