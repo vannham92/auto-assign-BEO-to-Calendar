@@ -52,32 +52,38 @@ def generate_ics(events):
     return "\n".join(ics)
 
 if uploaded_file:
-    with st.spinner("AI đang phân tích BEO..."):
-        # Lấy dữ liệu file dưới dạng bytes
+    with st.spinner("AI đang đọc dữ liệu BEO..."):
+        # BƯỚC 1: Định nghĩa prompt rõ ràng trước khi dùng
+        prompt = """
+        Phân tích hình ảnh/PDF BEO này và trả về JSON list 'events'. 
+        Các trường: Date(DD/MM/YYYY), Time(HH:MM–HH:MM), Function, Location, Set up, Quantity, Company, End user.
+        Tính 'Total Amount' = Price * Quantity. Chỉ trả về JSON.
+        """
+        
+        # BƯỚC 2: Lấy dữ liệu bytes từ file tải lên
         file_data = uploaded_file.getvalue()
         mime_type = uploaded_file.type
         
-        # Cấu trúc nội dung gửi cho AI
-        # Gemini 1.5 Flash có thể đọc trực tiếp cả PDF và Ảnh dưới dạng bytes
+        # BƯỚC 3: Đóng gói dữ liệu gửi đi (Content Parts)
+        # Gemini cần một danh sách gồm chữ (prompt) và dữ liệu (dict mime_type/data)
         content_parts = [
             prompt,
             {"mime_type": mime_type, "data": file_data}
         ]
         
         try:
-            # Gửi yêu cầu cho Gemini
+            # BƯỚC 4: Gọi API
             response = model.generate_content(content_parts)
             
-            # Xử lý kết quả trả về
-            raw_text = response.text.replace("```json", "").replace("```", "").strip()
+            # Làm sạch và phân tích kết quả JSON
+            raw_text = response.text.replace("
+```json", "").replace("```", "").strip()
             data = json.loads(raw_text)
             
-            # (Các bước hiển thị bảng và tạo file .ics giữ nguyên như cũ)
             st.success("Đã trích xuất thành công!")
             st.table(data['events'])
             
-            # ... (phần tạo file .ics) ...
+            # Tiếp tục logic tạo file .ics ...
             
         except Exception as e:
-            st.error(f"Lỗi: {e}")
-            st.info("Mẹo: Đảm bảo API Key của bạn còn hiệu lực và file không quá nặng.")
+            st.error(f"Lỗi khi xử lý: {e}")
