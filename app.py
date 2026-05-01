@@ -1,89 +1,79 @@
 import streamlit as st
 import google.generativeai as genai
-from pypdf import PdfReader
-import datetime
+import urllib.parse
 import json
-import io
 
 # --- 1. CẤU HÌNH API ---
-# Thay API Key của bạn vào đây
-API_KEY = st.secrets["GEMINI_API_KEY"] 
+API_KEY = st.secrets["GEMINI_API_KEY"] # Lấy từ mục Secrets trên Streamlit Cloud
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('models/gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- 2. GIAO DIỆN WEB ---
-st.set_page_config(page_title="BEO to Outlook Converter", layout="wide")
-st.title("🏨 BEO AI Converter")
-st.subheader("Trích xuất lịch sự kiện từ PDF/Ảnh sang file Outlook (.ics)")
+# --- 2. GIAO DIỆN ---
+st.set_page_config(page_title="BEO to Google Calendar", page_icon="🏨")
+st.title("🏨 BEO AI - Google Calendar Integration")
 
-uploaded_file = st.file_uploader("Tải file BEO (PDF hoặc Ảnh chụp)", type=["pdf", "png", "jpg", "jpeg"])
+uploaded_file = st.file_uploader("Tải BEO (PDF/Ảnh)", type=["pdf", "png", "jpg", "jpeg"])
 
-# --- 3. LOGIC XỬ LÝ ---
-def generate_ics(events):
-    """Tạo nội dung file .ics chuẩn"""
-    ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//BEO AI//VN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"]
-    for ev in events:
-        try:
-            # Xử lý ngày giờ
-            date_str = ev['Date'].replace("/", "")
-            start_time = ev['Time'].split("–")[0].strip().replace(":", "")
-            end_time = ev['Time'].split("–")[1].strip().replace(":", "")
-            
-            dtstart = f"{date_str[4:]}{date_str[2:4]}{date_str[:2]}T{start_time}00"
-            dtend = f"{date_str[4:]}{date_str[2:4]}{date_str[:2]}T{end_time}00"
-            
-            ics.append("BEGIN:VEVENT")
-            ics.append(f"SUMMARY:{ev['Function']} - {ev['End user']}")
-            ics.append(f"DTSTART:{dtstart}")
-            ics.append(f"DTEND:{dtend}")
-            ics.append(f"LOCATION:{ev['Location']}")
-            desc = f"Setup: {ev['Set up']}\\nQuantity: {ev['Quantity']}\\nTotal: {ev['Total Amount']}\\nCompany: {ev['Company']}"
-            ics.append(f"DESCRIPTION:{desc}")
-            # Nhắc nhở 8h sáng
-            ics.append("BEGIN:VALARM")
-            ics.append(f"TRIGGER;VALUE=DATE-TIME:{dtstart[:8]}T080000")
-            ics.append("ACTION:DISPLAY")
-            ics.append("DESCRIPTION:Nhắc nhở sự kiện BEO hôm nay")
-            ics.append("END:VALARM")
-            ics.append("END:VEVENT")
-        except:
-            continue
-    ics.append("END:VCALENDAR")
-    return "\n".join(ics)
+# --- 3. HÀM TẠO GOOGLE CALENDAR LINK ---
+def create_google_url(ev):
+    base_url = "https://www.google.com/calendar/render?action=TEMPLATE"
+    
+    # Định dạng ngày giờ: DD/MM/YYYY -> YYYYMMDD
+    d = ev['Date'].split('/')
+    date_iso = f"{d[2]}{d[1]}{d[0]}"
+    
+    # Giờ: HH:MM – HH:MM -> HHMMSS
+    times = ev['Time'].split('–')
+    start_t = times[0].strip().replace(":", "") + "00"
+    end_t = times[1].strip().replace(":", "") + "00"
+    
+    dates = f"{date_iso}T{start_t}/{date_iso}T{end_t}"
+    
+    params = {
+        "text": f"{ev['Function']} - {ev['End user']}",
+        "dates": dates,
+        "details": f"Company: {ev['Company']}\nSetup: {ev['Set up']}\nQuantity: {ev['Quantity']}\nTotal: {ev['Total Amount']}",
+        "location": ev['Location'],
+        "sf": "true",
+        "output": "xml"
+    }
+    return base_url + "&" + urllib.parse.urlencode(params)
 
+# --- 4. XỬ LÝ DỮ LIỆU ---
 if uploaded_file:
-    with st.spinner("AI đang đọc dữ liệu BEO..."):
-        # BƯỚC 1: Định nghĩa prompt rõ ràng trước khi dùng
+    with st.spinner("AI đang tìm dòng TỔNG và trích xuất dữ liệu..."):
+        # Cập nhật Prompt: Yêu cầu AI lấy từ dòng TỔNG / TOTAL
         prompt = """
-        Phân tích hình ảnh/PDF BEO này và trả về JSON list 'events'. 
-        Các trường: Date(DD/MM/YYYY), Time(HH:MM–HH:MM), Function, Location, Set up, Quantity, Company, End user.
-        Tính 'Total Amount' = Price * Quantity. Chỉ trả về JSON.
+        Phân tích BEO này và trả về JSON list 'events'. 
+        
+        YÊU CẦU QUAN TRỌNG:
+        - KHÔNG tự tính toán giá tiền.
+        - Tìm dòng 'TỔNG / TOTAL' hoặc dòng cuối cùng ghi số tiền tổng cộng của tài liệu để lấy 'Total Amount'.
+        - Trích xuất: Date(DD/MM/YYYY), Time(HH:MM–HH:MM), Function, Location, Set up, Quantity, Company, End user.
+        - Chỉ trả về JSON duy nhất.
         """
         
-        # BƯỚC 2: Lấy dữ liệu bytes từ file tải lên
         file_data = uploaded_file.getvalue()
-        mime_type = uploaded_file.type
-        
-        # BƯỚC 3: Đóng gói dữ liệu gửi đi (Content Parts)
-        # Gemini cần một danh sách gồm chữ (prompt) và dữ liệu (dict mime_type/data)
-        content_parts = [
-            prompt,
-            {"mime_type": mime_type, "data": file_data}
-        ]
+        response = model.generate_content([prompt, {"mime_type": uploaded_file.type, "data": file_data}])
         
         try:
-            # BƯỚC 4: Gọi API
-            response = model.generate_content(content_parts)
-            
-            # Làm sạch và phân tích kết quả JSON
-            raw_text = response.text.replace("
-```json", "").replace("```", "").strip()
+            raw_text = response.text.replace("```json", "").replace("```", "").strip()
             data = json.loads(raw_text)
             
-            st.success("Đã trích xuất thành công!")
-            st.table(data['events'])
+            st.success("Đã trích xuất dữ liệu thành công!")
             
-            # Tiếp tục logic tạo file .ics ...
-            
+            for ev in data['events']:
+                with st.expander(f"Chi tiết: {ev['Function']}", expanded=True):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"📅 **Ngày:** {ev['Date']}")
+                        st.write(f"⏰ **Giờ:** {ev['Time']}")
+                        st.write(f"🏢 **Đơn vị:** {ev['Company']}")
+                    with col2:
+                        st.write(f"📍 **Vị trí:** {ev['Location']}")
+                        st.write(f"👥 **Số lượng:** {ev['Quantity']}")
+                        st.write(f"💰 **Tổng cộng (Từ file):** {ev['Total Amount']}")
+                    
+                    st.link_button(f"➕ Add to Google Calendar", create_google_url(ev))
         except Exception as e:
-            st.error(f"Lỗi khi xử lý: {e}")
+            st.error(f"Lỗi: AI không tìm thấy cấu trúc JSON phù hợp hoặc dòng Tổng tiền.")
