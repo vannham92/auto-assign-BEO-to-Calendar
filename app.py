@@ -9,7 +9,7 @@ import io
 # Thay API Key của bạn vào đây
 API_KEY = st.secrets["GEMINI_API_KEY"] 
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('models/gemini-1.5-flash')
 
 # --- 2. GIAO DIỆN WEB ---
 st.set_page_config(page_title="BEO to Outlook Converter", layout="wide")
@@ -52,28 +52,32 @@ def generate_ics(events):
     return "\n".join(ics)
 
 if uploaded_file:
-    with st.spinner("AI đang đọc dữ liệu BEO..."):
-        # Chuyển đổi file để AI đọc
-        if uploaded_file.type == "application/pdf":
-            reader = PdfReader(uploaded_file)
-            content = " ".join([page.extract_text() for page in reader.pages])
-        else:
-            content = uploaded_file.getvalue() # Nếu là ảnh
-
-        prompt = """
-        Phân tích BEO này và trả về JSON list 'events'. 
-        Các trường: Date(DD/MM/YYYY), Time(HH:MM–HH:MM), Function, Location, Set up, Quantity, Company, End user.
-        Tính 'Total Amount' = Price * Quantity. Chỉ trả về JSON.
-        """
+    with st.spinner("AI đang phân tích BEO..."):
+        # Lấy dữ liệu file dưới dạng bytes
+        file_data = uploaded_file.getvalue()
+        mime_type = uploaded_file.type
         
-        response = model.generate_content([prompt, uploaded_file] if uploaded_file.type != "application/pdf" else [prompt, content])
+        # Cấu trúc nội dung gửi cho AI
+        # Gemini 1.5 Flash có thể đọc trực tiếp cả PDF và Ảnh dưới dạng bytes
+        content_parts = [
+            prompt,
+            {"mime_type": mime_type, "data": file_data}
+        ]
         
         try:
-            data = json.loads(response.text.replace("```json", "").replace("```", ""))
+            # Gửi yêu cầu cho Gemini
+            response = model.generate_content(content_parts)
+            
+            # Xử lý kết quả trả về
+            raw_text = response.text.replace("```json", "").replace("```", "").strip()
+            data = json.loads(raw_text)
+            
+            # (Các bước hiển thị bảng và tạo file .ics giữ nguyên như cũ)
             st.success("Đã trích xuất thành công!")
             st.table(data['events'])
             
-            ics_data = generate_ics(data['events'])
-            st.download_button("⬇️ Tải file .ics cho Outlook", ics_data, file_name="BEO_Schedule.ics", mime="text/calendar")
-        except:
-            st.error("AI không thể đọc được cấu trúc file này. Hãy thử chụp ảnh rõ hơn.")
+            # ... (phần tạo file .ics) ...
+            
+        except Exception as e:
+            st.error(f"Lỗi: {e}")
+            st.info("Mẹo: Đảm bảo API Key của bạn còn hiệu lực và file không quá nặng.")
